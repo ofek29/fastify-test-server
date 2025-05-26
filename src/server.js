@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import Valkey from 'iovalkey'
 import fastifyValkey from '@ofek.a/fastify-iovalkey'
+import fastifyRedis from '@fastify/redis'
 
 // Import route modules
 import basicRoutes from './routes/basic.js'
@@ -19,14 +20,11 @@ const fastify = Fastify({
 })
 
 // Setup server with various Valkey configurations
-async function setupServer() {
+async function setupValkey () {
   // Basic setup with single client
   await fastify.register(fastifyValkey, {
     host: '127.0.0.1',
-    port: 6379,
-    // Uncomment if you need authentication
-    // password: 'your-password', 
-    family: 4
+    port: 6379
   })
 
   // Setup namespaced clients
@@ -51,25 +49,64 @@ async function setupServer() {
   await fastify.register(testRoutes)
 }
 
+// Setup Server with client errors
+async function setupErrorClients(type) {
+  // Define error clients based on the type
+        const errorClients = {
+        // Wrong port - connection timeout
+        portError: {
+          host: '127.0.0.1',
+          port: 9999
+        },
+        
+        // Invalid host - DNS error
+        dnsError: {
+          host: 'invalid-host.local',
+          port: 6379
+        }
+      }
+      try {
+        // const valkeyClient = new Valkey({
+        //   host: 'invalid-host.local',
+        //   port: 6379
+        // })
+        if (type){
+          await fastify.register(fastifyRedis, errorClients[type])
+        }
+      } catch (err) {
+        fastify.log.error(`Expected error setting up ${type} client:`, err)
+      }
+    }
+
+
 // Start the server
 async function start() {
   try {
-    await setupServer()
+    await setupValkey()
+    await setupErrorClients('portError')
     await fastify.listen({ port: 3000, host: '0.0.0.0' })
     fastify.log.info(`Server listening on ${fastify.server.address().port}`)
-    fastify.log.info('Available test endpoints:')
-    fastify.log.info('- GET /health')
-    fastify.log.info('- GET /test-all')
-    fastify.log.info('- GET /basic/get?key=yourKey')
-    fastify.log.info('- POST /basic/set (body: {key, value})')
-    fastify.log.info('- GET /namespaced/:namespace/get?key=yourKey')
-    fastify.log.info('- POST /namespaced/:namespace/set (body: {key, value})')
-    fastify.log.info('- POST /streams/add (body: {streamName, field, value})')
-    fastify.log.info('- GET /streams/read?streamName=yourStream&id=0')
   } catch (err) {
     fastify.log.error(err)
     process.exit(1)
   }
 }
+
+// Graceful shutdown
+const gracefulShutdown = async (signal) => {
+  fastify.log.info(`Received ${signal}, shutting down gracefully...`)
+  try {
+    await fastify.close()
+    fastify.log.info('Server closed successfully')
+    process.exit(0)
+  } catch (err) {
+    fastify.log.error('Error during shutdown:', err)
+    process.exit(1)
+  }
+}
+
+// Handle shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
 
 start()
